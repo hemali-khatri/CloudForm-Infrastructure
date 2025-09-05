@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master stack with CI/CD pipeline for nested infrastructure (VPC, Security, Lambda, RDS, Backend, Frontend)
+
+Parameters:
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 10.0.2.0/24
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+  PublicSubnet1CIDR:
+    Type: String
+    Default: 10.0.1.0/24
+  PublicSubnet2CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+  BastionHostIP:
+    Type: String
+    Default: 203.0.113.42/32
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+
+  GitHubConnectionArn:
+    Type: String
+    Default: arn:aws:codeconnections:us-east-1:410970225374:connection/fef028b3-cc24-4bfe-a884-3944dac3a3de
+  GitHubRepo:
+    Type: String
+    Default: hemali-khatri/CloudForm-infra   # repo where all templates live
+  GitHubBranch:
+    Type: String
+    Default: main
+
+Resources:
+
+  #########################
+  # Nested Stacks
+  #########################
+
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./vpc.yaml
+      Parameters:
+        VpcCIDR: !Ref VpcCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
+        PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./security.yaml
+      Parameters:
+        VPCID: !GetAtt VPCStack.Outputs.VPCID
+
+  LambdaSecretStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lambda-secret.yaml
+
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./rds.yaml
+      Parameters:
+        SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
+        RDSSecurityGroup: !GetAtt SecurityStack.Outputs.RDSSecurityGroup
+        DBPassword: !GetAtt LambdaSecretStack.Outputs.DBPassword
+        DBSecretArn: !GetAtt LambdaSecretStack.Outputs.DbSecretArn
+
+  BackendStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./backend.yaml
+      Parameters:
+        VPC: !GetAtt VPCStack.Outputs.VPCID
+        PrivateSubnet1: !GetAtt VPCStack.Outputs.PrivateSubnet1
+        PrivateSubnet2: !GetAtt VPCStack.Outputs.PrivateSubnet2
+        PublicSubnet1: !GetAtt VPCStack.Outputs.PublicSubnet1
+        PublicSubnet2: !GetAtt VPCStack.Outputs.PublicSubnet2
+        BastionHostIP: !Ref BastionHostIP
+        KeyName: !Ref KeyName
+        GitHubConnectionArn: !Ref GitHubConnectionArn
+        GitHubRepo: !Ref GitHubRepo
+        GitHubBranch: !Ref GitHubBranch
+        DBSecretArn: !GetAtt LambdaSecretStack.Outputs.DbSecretArn
+        RdsEndpoint: !GetAtt RDSStack.Outputs.RdsEndpoint
+        EC2SecurityGroup: !GetAtt SecurityStack.Outputs.EC2SecurityGroup
+        ALBSecurityGroup: !GetAtt SecurityStack.Outputs.ALBSecurityGroup
+
+  FrontendStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./frontend.yaml
+      Parameters:
+        GitHubConnectionArn: !Ref GitHubConnectionArn
+        GitHubRepoName: hemali-khatri/CloudForm-ReactApp
+        GitHubBranch: !Ref GitHubBranch
+        BackendAPIURL: !GetAtt BackendStack.Outputs.BackendAPIURL 
+
+  #########################
+  # CI/CD Pipeline
+  #########################
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: 1
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        - Name: Deploy
+          Actions:
+            - Name: CFNDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: MasterInfraStack
+                TemplatePath: SourceOutput::parent.yaml
+                Capabilities: CAPABILITY_NAMED_IAM
+              InputArtifacts:
+                - Name: SourceOutput
+
+Outputs:
+  FrontendWebsiteURL:
+    Value: !GetAtt FrontendStack.Outputs.WebsiteURL
+  BackendAPIURL:
+    Value: !GetAtt BackendStack.Outputs.BackendAPIURL
+  RdsEndpoint:
+    Value: !GetAtt RDSStack.Outputs.RdsEndpoint
+  DBSecretArn:
+    Value: !GetAtt LambdaSecretStack.Outputs.DbSecretArn

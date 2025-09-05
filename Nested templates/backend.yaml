@@ -1,0 +1,548 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Node.js Backend: EC2 in private subnets with ALB (HTTP), CICD pipeline (GitHub → CodeBuild → CodeDeploy), CloudWatch logging, and Secrets Manager for DB.
+
+Parameters:
+  VPC:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+  BastionHostIP:
+    Type: String
+    Description: Enter your public IP address (e.g., 203.0.113.42/32)
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+  GitHubConnectionArn:
+    Type: String
+    Description: The ARN of the CodeStar connection to GitHub
+  GitHubRepo:
+    Type: String
+    Description: The name of the GitHub repository
+  GitHubBranch:
+    Type: String
+    Description: The GitHub branch to deploy from
+  DBSecretArn:
+    Type: String
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.12-x86_64'
+  RdsEndpoint:
+    Type: String
+  EC2SecurityGroup:
+    Type: String
+  ALBSecurityGroup:
+    Type: String
+
+Resources:
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Bastion Host
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  BastionInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BastionInstanceRole
+
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      Tags:
+        - Key: Name
+          Value: BastionHost
+  
+  # Security Group to allow Bastion to access private instances
+  BastionToPrivateSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow Bastion to access private instances"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: "BastionToPrivateSG"
+
+  PipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketName: !Sub backend-codepipeline-artifacts-${AWS::AccountId}-${AWS::Region}
+
+  ALBAccessLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub alb-access-logs-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+
+  ALBAccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ALBAccessLogsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: logdelivery.elasticloadbalancing.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub arn:aws:s3:::${ALBAccessLogsBucket}/AWSLogs/${AWS::AccountId}/*
+
+  # IAM Role for EC2
+  BackendInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess  # Read access for CodeDeploy installer
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+      - PolicyName: AllowSecretsManagerAccess
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Sid: AllowSecretsManagerReadOnly
+              Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref DBSecretArn
+            - Sid: AllowCloudFormationReadOnly
+              Effect: Allow
+              Action:
+                - cloudformation:ListExports
+              Resource: "*"
+
+  BackendInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BackendInstanceRole
+
+  # Launch Template for EC2 Backend
+  BackendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: t3.micro
+        SecurityGroupIds:
+            - !Ref EC2SecurityGroup
+        IamInstanceProfile:
+          Name: !Ref BackendInstanceProfile
+        KeyName: !Ref KeyName
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
+            sudo dnf update -y
+
+            # Install dependencies required for CodeDeploy
+            sudo dnf install wget jq git awscli -y
+            sudo dnf install ruby -y
+
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+            sudo dnf install -y nodejs
+
+            # Install CloudWatch Agent
+            sudo dnf install -y amazon-cloudwatch-agent
+
+            # Install PM2 globally
+            sudo npm install -g pm2
+                  
+            # Install CodeDeploy agent
+            cd /home/ec2-user
+            wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+            chmod +x ./install
+            sudo ./install auto
+            sudo systemctl enable codedeploy-agent
+            sudo systemctl start codedeploy-agent
+
+            # Prepare backend app directory
+            mkdir -p /home/ec2-user/backend-app
+            cd /home/ec2-user/backend-app
+
+            # Static DB Port
+            DB_PORT=3306
+
+            # Import DB secret ARN and endpoint from database stack              
+            SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id ${DBSecretArn} --query SecretString --output text)
+
+            DB_USERNAME=$(echo $SECRET_VALUE | jq -r .username)
+            DB_PASSWORD=$(echo $SECRET_VALUE | jq -r .password)
+
+            # Export database environment variables
+            echo "DB_SECRET_ARN=${DBSecretArn}" >> /home/ec2-user/backend-app/.env
+            echo "DB_HOST=${RdsEndpoint}" >> /home/ec2-user/backend-app/.env
+            echo "DB_PORT=$DB_PORT" >> /home/ec2-user/backend-app/.env
+            echo "DB_USER=$DB_USERNAME" >> /home/ec2-user/backend-app/.env
+            echo "DB_PASSWORD=$DB_PASSWORD" >> /home/ec2-user/backend-app/.env
+            echo "API_URL=http://${BackendALB.DNSName}/api/users" >> /home/ec2-user/backend-app/.env
+            
+            chown ec2-user:ec2-user /home/ec2-user/backend-app
+            chmod 755 /home/ec2-user/backend-app
+
+            aws ssm get-parameter \
+            --name "/ec2/cloudwatch/agent/config" \
+            --region ${AWS::Region} \
+            --with-decryption \
+            --query "Parameter.Value" \
+            --output text > /opt/aws/amazon-cloudwatch-agent/bin/config.json
+
+            # Start CloudWatch Agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json -s
+
+  # Load Balancer & Target Group
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: 3000
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: 3000
+      HealthCheckPath: /health
+      Matcher:
+        HttpCode: 200
+      TargetType: instance
+
+  BackendALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+      SecurityGroups:
+      - !Ref ALBSecurityGroup
+      Scheme: internet-facing
+      Type: application
+      LoadBalancerAttributes:
+        - Key: access_logs.s3.enabled
+          Value: "true"
+        - Key: access_logs.s3.bucket
+          Value: !Ref ALBAccessLogsBucket
+
+  ALBListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref BackendALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # Auto Scaling Group
+  BackendASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BackendLaunchTemplate
+        Version: !GetAtt BackendLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier: [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ]
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      TargetGroupARNs:
+        - !Ref BackendTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ASG"
+          PropagateAtLaunch: true
+
+  # CodeDeploy Application & Deployment Group
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ComputePlatform: Server
+
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: CodeDeployPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:*
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - tag:GetTags
+                  - elasticloadbalancing:*
+                  - s3:Get*
+                  - s3:List*
+                  - cloudwatch:*
+                  - codedeploy:*
+                Resource: "*"
+
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    DependsOn: BackendASG
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: BackendDeploymentGroup
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      AutoScalingGroups:
+        - !Ref BackendASG
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+            - Name: !GetAtt BackendTargetGroup.TargetGroupName
+      Ec2TagSet:
+        Ec2TagSetList:
+          - Ec2TagGroup:
+              - Key: Name
+                Value: !Sub "${AWS::StackName}-ASG"
+                Type: KEY_AND_VALUE
+
+  # CodeBuild Role & Project
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchLogsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DBSecretArn
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+      Path: /
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: BackendCodeBuildProject
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - Name: NODE_ENV
+            Value: production
+      Source:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 30
+
+  # CodePipeline Role & Pipeline
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeConnectionsUsagePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codeconnections:UseConnection
+                  - codestar-connections:UseConnection
+                Resource: !Ref GitHubConnectionArn
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+        - arn:aws:iam::aws:policy/AWSCodeDeployFullAccess
+      Path: /
+
+  BackendCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: true
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+        - Name: Deploy
+          Actions:
+            - Name: CodeDeployDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: 1
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref CodeDeployDeploymentGroup
+              RunOrder: 1
+
+  EC2AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ec2/${AWS::StackName}/application"
+      RetentionInDays: 30
+  
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm if average CPU > 70% for 5 minutes"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref BackendASG
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopic
+
+  AlarmSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-AlarmTopic"
+      DisplayName: "CloudWatch Alarm Notifications"
+
+  AlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: hemali.khatri@tatvasoft.com   # 🔑 Replace with your email
+      TopicArn: !Ref AlarmSNSTopic
+
+# Outputs
+Outputs:
+  ASGName:
+    Description: Auto Scaling Group Name
+    Value: !Ref BackendASG
+  CodePipelineName:
+    Description: CI/CD Pipeline Name
+    Value: !Ref BackendCodePipeline
+  BastionPublicIP:
+    Description: Public IP of the Bastion Host
+    Value: !GetAtt BastionHost.PublicIp
+  BackendAPIURL:
+    Description: 'The URL of the backend API'
+    Value: !GetAtt BackendALB.DNSName
+  AlarmSNSTopic:
+    Description: SNS Topic for Alarm Notifications
+    Value: !Ref AlarmSNSTopic

@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CI/CD Pipeline with GitHub and CodeBuild'
+
+Parameters:
+  GitHubConnectionArn:
+    Type: String
+    Description: The ARN of the CodeStar connection to GitHub
+  GitHubRepoName:
+    Type: String
+    Description: The name of the GitHub repository (e.g., 'my-repo')
+    Default: hemali-khatri/CloudForm-ReactApp
+  GitHubBranch:
+    Type: String
+    Description: The GitHub branch to deploy from (e.g., 'main')
+    Default: "main"
+  CloudFrontDefaultRootObject:
+    Type: String
+    Default: index.html
+    Description: "CloudFront default root object"
+  BackendAPIURL:
+    Type: String
+    Description: "Backend API URL for Frontend"
+
+Resources:
+
+    # S3 Bucket for hosting the Angular App
+  FrontendS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'frontend-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+    DeletionPolicy: Retain
+
+  FrontendCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: FrontendCachePolicy
+        DefaultTTL: 86400   # 1 day
+        MaxTTL: 31536000    # 1 year
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig:
+            CookieBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: all
+
+  FrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-OAC"
+        Description: "OAC for CloudFront to access S3 bucket"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendCloudFrontDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: !Ref CloudFrontDefaultRootObject
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendS3Bucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref FrontendOAC
+          # ALB Backend API
+          - Id: ALBOrigin
+            DomainName: !Ref BackendAPIURL
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: !Ref FrontendCachePolicy
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: ALBOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  # IAM Role for CodeBuild (necessary permissions)
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchLogsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+                  - !Sub "${FrontendS3Bucket.Arn}/*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+      Path: /
+
+  ########################
+  # CodeBuild Project
+  ########################
+  ReactCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: ReactCodeBuildProject
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+        # Name: BuildOutput
+        # Location: dist/frontend  # Ensure this matches the output of the build
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - Name: REACT_APP_API_URL
+            Value: "/api"
+            Type: PLAINTEXT
+      Source:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 30
+
+  # IAM Role for CodePipeline to interact with AWS resources (S3, CodeBuild, etc.)
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeConnectionsUsagePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codeconnections:UseConnection
+                  - codestar-connections:UseConnection
+                Resource:
+                  - !Ref GitHubConnectionArn
+        - PolicyName: CloudFrontInvalidationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                - cloudfront:CreateInvalidation
+                Resource: "*"   # Or scope to your distribution ARN
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Path: /
+  
+  CloudFrontInvalidationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudFrontInvalidationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: "*" # Or restrict to your specific distribution
+              - Effect: Allow
+                Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+                - s3:ListBucket
+                Resource:
+                - !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Path: /
+
+  CloudFrontInvalidationProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-CloudFrontInvalidation"
+      ServiceRole: !GetAtt CloudFrontInvalidationRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE   # must be CODEPIPELINE when Source.Type is CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:6.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: CLOUDFRONT_ID
+            Value: !Ref FrontendCloudFrontDistribution
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo "Invalidating CloudFront cache..."
+                - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_ID --paths "/*"
+      TimeoutInMinutes: 10
+
+  # CodePipeline to connect the CodeStar connection to GitHub
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${AWS::AccountId}-codepipeline-artifacts"
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: NodeJsPipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepoName
+                BranchName: !Ref GitHubBranch
+                DetectChanges: true
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref ReactCodeBuild
+        - Name: Approve
+          Actions:
+            - Name: ManualApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: 1
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: S3Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: 1
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                BucketName: !Ref FrontendS3Bucket
+                Extract: true
+              RunOrder: 1
+            - Name: InvalidateCloudFront
+              ActionTypeId:
+                Category: Build       
+                Owner: AWS
+                Provider: CodeBuild  
+                Version: '1'
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CloudFrontInvalidationProject
+              RunOrder: 2
+
+Outputs:
+  WebsiteURL:
+    Description: 'URL of the Angular frontend application hosted on CloudFront'
+    Value: !Sub 'https://${FrontendCloudFrontDistribution.DomainName}'
+
+  CloudFrontDomainName:
+    Description: 'CloudFront Distribution Domain Name'
+    Value: !GetAtt FrontendCloudFrontDistribution.DomainName

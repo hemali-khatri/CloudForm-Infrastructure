@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: RDS DB Instance with subnet group
+
+Parameters:
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  DBUsername:
+    Type: String
+    Default: admin
+  DBName:
+    Type: String
+    Default: finalproject
+    Description: Initial DB name (will be created by RDS)
+  DBSecretArn:
+    Type: String
+  RDSSecurityGroup:
+    Type: String
+
+Resources:
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: For RDS instance
+      SubnetIds: !Ref SubnetIds
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "rds-${AWS::StackName}"
+      DBName: !Ref DBName
+      Engine: mysql
+      EngineVersion: "8.0"
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      MultiAZ: false
+      PubliclyAccessible: false
+      StorageType: gp3
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "01:00-02:00"
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecretArn}:SecretString:password}}'
+      EnableCloudwatchLogsExports:
+        - error
+        - general
+        - slowquery
+
+Outputs:
+  RdsEndpoint:
+    Value: !GetAtt DBInstance.Endpoint.Address
+  RdsPort:
+    Description: "RDS endpoint port"
+    Value: !GetAtt DBInstance.Endpoint.Port
+  DbName:
+    Description: "Database name"
+    Value: !Ref DBName
