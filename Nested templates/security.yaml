@@ -4,11 +4,16 @@ Description: Security groups for EC2, ALB, RDS
 Parameters:
   VPCID:
     Type: String
+  AppName:
+    Type: String
+  Environment:
+    Type: String
 
 Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupName: !Sub "${AppName}-${Environment}-alb-sg"
       GroupDescription: Allow HTTP
       VpcId: !Ref VPCID
       SecurityGroupIngress:
@@ -16,10 +21,16 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppName}-${Environment}-alb-sg"
+        - Key: Environment
+          Value: !Ref Environment
 
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupName: !Sub "${AppName}-${Environment}-ec2-sg"
       GroupDescription: Allow SSH and app port
       VpcId: !Ref VPCID
       SecurityGroupIngress:
@@ -31,10 +42,16 @@ Resources:
           FromPort: 3000
           ToPort: 3000
           SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppName}-${Environment}-ec2-sg"
+        - Key: Environment
+          Value: !Ref Environment
 
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupName: !Sub "${AppName}-${Environment}-rds-sg"
       GroupDescription: Allow MySQL from EC2
       VpcId: !Ref VPCID
       SecurityGroupIngress:
@@ -42,6 +59,11 @@ Resources:
           FromPort: 3306
           ToPort: 3306
           SourceSecurityGroupId: !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppName}-${Environment}-rds-sg"
+        - Key: Environment
+          Value: !Ref Environment
 
 Outputs:
   EC2SecurityGroup:

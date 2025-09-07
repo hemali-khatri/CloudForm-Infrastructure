@@ -20,6 +20,10 @@ Parameters:
   BackendAPIURL:
     Type: String
     Description: "Backend API URL for Frontend"
+  AppName:
+    Type: String
+  Environment:
+    Type: String
 
 Resources:
 
@@ -27,7 +31,8 @@ Resources:
   FrontendS3Bucket:
     Type: 'AWS::S3::Bucket'
     Properties:
-      BucketName: !Sub 'frontend-${AWS::AccountId}-${AWS::Region}'
+      BucketName: !Sub "${AppName}-${Environment}-frontend-bucket"
+      AccessControl: Private
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:
@@ -41,7 +46,7 @@ Resources:
     Type: AWS::CloudFront::CachePolicy
     Properties:
       CachePolicyConfig:
-        Name: FrontendCachePolicy
+        Name: !Sub "${AppName}-${Environment}-frontend-cache-policy"
         DefaultTTL: 86400   # 1 day
         MaxTTL: 31536000    # 1 year
         MinTTL: 0
@@ -59,7 +64,7 @@ Resources:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: !Sub "${AWS::StackName}-OAC"
+        Name: !Sub "${AppName}-${Environment}-oac"
         Description: "OAC for CloudFront to access S3 bucket"
         OriginAccessControlOriginType: s3
         SigningBehavior: always
@@ -122,6 +127,7 @@ Resources:
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${AppName}-${Environment}-codebuild-role-pj"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -159,7 +165,7 @@ Resources:
   ReactCodeBuild:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: ReactCodeBuildProject
+      Name: !Sub "${AppName}-${Environment}-frontend-codebuild-pj"
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       Artifacts:
         Type: CODEPIPELINE
@@ -181,6 +187,7 @@ Resources:
   CodePipelineServiceRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${AppName}-${Environment}-codepipeline-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -216,6 +223,7 @@ Resources:
   CloudFrontInvalidationRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${AppName}-${Environment}-cloudfront-invalidation-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -246,7 +254,7 @@ Resources:
   CloudFrontInvalidationProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub "${AWS::StackName}-CloudFrontInvalidation"
+      Name: !Sub "${AppName}-${Environment}-codebuild-cf-invalidation"
       ServiceRole: !GetAtt CloudFrontInvalidationRole.Arn
       Artifacts:
         Type: CODEPIPELINE   # must be CODEPIPELINE when Source.Type is CODEPIPELINE
@@ -274,12 +282,12 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      BucketName: !Sub "${AWS::AccountId}-codepipeline-artifacts"
+      BucketName: !Sub "${AppName}-${Environment}-frontend-artifacts"
 
   CodePipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      Name: NodeJsPipeline
+      Name: !Sub "${AppName}-${Environment}-frontend-pipeline"
       RoleArn: !GetAtt CodePipelineServiceRole.Arn
       ArtifactStore:
         Type: S3
@@ -353,7 +361,9 @@ Outputs:
   WebsiteURL:
     Description: 'URL of the Angular frontend application hosted on CloudFront'
     Value: !Sub 'https://${FrontendCloudFrontDistribution.DomainName}'
-
   CloudFrontDomainName:
     Description: 'CloudFront Distribution Domain Name'
     Value: !GetAtt FrontendCloudFrontDistribution.DomainName
+  FrontendCloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref FrontendCloudFrontDistribution

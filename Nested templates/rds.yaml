@@ -15,18 +15,23 @@ Parameters:
     Type: String
   RDSSecurityGroup:
     Type: String
+  AppName:
+    Type: String
+  Environment:
+    Type: String
 
 Resources:
   RDSSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: For RDS instance
+      DBSubnetGroupName: !Sub "${AppName}-${Environment}-rds-subnetgroup"
+      DBSubnetGroupDescription: !Sub "RDS subnet group for ${AppName}-${Environment}"
       SubnetIds: !Ref SubnetIds
 
   DBInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: !Sub "rds-${AWS::StackName}"
+      DBInstanceIdentifier: !Sub "${AppName}-${Environment}-rds-dbinstance"
       DBName: !Ref DBName
       Engine: mysql
       EngineVersion: "8.0"
@@ -46,6 +51,29 @@ Resources:
         - error
         - general
         - slowquery
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  RDSCloudTrailAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppName}-${Environment}-rds-cloudwatch-alarm"
+      AlarmDescription: "Alert on unauthorized RDS actions (auditing via CloudTrail)"
+      MetricName: EventCount
+      Namespace: AWS/CloudTrail
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: TrailARN
+          Value: !Ref CloudTrailArn
+      AlarmActions: []  # You can pass SNS topic ARN from parent stack here if required
 
 Outputs:
   RdsEndpoint:
@@ -56,3 +84,6 @@ Outputs:
   DbName:
     Description: "Database name"
     Value: !Ref DBName
+  RDSInstanceIdentifier:
+    Description: Identifier of the RDS DB instance
+    Value: !Ref DBInstance

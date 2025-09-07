@@ -1,0 +1,223 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Monitoring and Logging Stack for Backend, Frontend, and RDS resources
+
+Parameters:
+  BackendASGName:
+    Type: String
+    Description: AutoScalingGroup Name from backend stack
+  BackendALBArn:
+    Type: String
+    Description: ARN of Backend Application Load Balancer
+  BackendEC2SecurityGroup:
+    Type: String
+    Description: Security Group of Backend EC2 instances
+  RDSInstanceIdentifier:
+    Type: String
+    Description: RDS DB Instance Identifier
+  AlarmEmail:
+    Type: String
+    Default: hemali.khatri@tatvasoft.com
+    Description: Email to receive CloudWatch alarm notifications
+  AppName:
+    Type: String
+  Environment:
+    Type: String
+
+Resources:
+
+  #######################
+  # SNS Topic for Alarms
+  #######################
+  AlarmSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AppName}-${Environment}-alarm-topic"
+      DisplayName: "CloudWatch Alarm Notifications"
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  AlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+      TopicArn: !Ref AlarmSNSTopic
+
+  ##########################
+  # EC2 CPU Utilization Alarm
+  ##########################
+  BackendHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppName}-${Environment}-BackendHighCPU"
+      AlarmDescription: "Alarm if average CPU > 70% for backend EC2 instances"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref BackendASGName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopic
+      OKActions:
+        - !Ref AlarmSNSTopic
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##########################
+  # ALB 5XX Error Alarm
+  ##########################
+  BackendALB5XXAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppName}-${Environment}-BackendALB5XX"
+      AlarmDescription: "Alarm if ALB 5XX errors exceed threshold"
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref BackendALBArn
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopic
+      OKActions:
+        - !Ref AlarmSNSTopic
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##########################
+  # RDS CPU Utilization Alarm
+  ##########################
+  RDSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppName}-${Environment}-RDSHighCPU"
+      AlarmDescription: "Alarm if RDS CPU exceeds 70%"
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RDSInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopic
+      OKActions:
+        - !Ref AlarmSNSTopic
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##########################
+  # RDS Free Storage Space Alarm
+  ##########################
+  RDSFreeStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppName}-${Environment}-RDSLowStorage"
+      AlarmDescription: "Alarm if RDS free storage falls below 10GB"
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RDSInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10737418240   # 10 GB in bytes
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopic
+      OKActions:
+        - !Ref AlarmSNSTopic
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##########################
+  # CloudWatch Log Groups
+  ##########################
+  BackendAppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AppName}/${Environment}/backend-app"
+      RetentionInDays: 30
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ALBAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AppName}/${Environment}/alb-access-logs"
+      RetentionInDays: 30
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  RDSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AppName}/${Environment}/rds-logs"
+      RetentionInDays: 30
+      Tags:
+        - Key: App
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+    
+    # Can create alarms for backend errors.    
+  BackendErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref BackendAppLogGroup
+      FilterPattern: "[ERROR]"
+      MetricTransformations:
+        - MetricName: BackendErrors
+          MetricNamespace: !Sub "${AppName}/${Environment}"
+          MetricValue: "1"
+
+Outputs:
+  AlarmSNSTopic:
+    Description: SNS Topic ARN for Alarms
+    Value: !Ref AlarmSNSTopic
+
+  BackendAppLogGroupName:
+    Description: Log group for backend application
+    Value: !Ref BackendAppLogGroup
+
+  ALBAccessLogGroupName:
+    Description: Log group for ALB access logs
+    Value: !Ref ALBAccessLogGroup
+
+  RDSLogGroupName:
+    Description: Log group for RDS logs
+    Value: !Ref RDSLogGroup
