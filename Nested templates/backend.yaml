@@ -445,6 +445,7 @@ Resources:
   CodePipelineServiceRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${AppName}-${Environment}-becodepipeline-role"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
