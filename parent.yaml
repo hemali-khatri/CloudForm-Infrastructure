@@ -99,8 +99,9 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: !Sub "${NestedTemplateBaseURL}/lambda-secret.yaml"
-      AppName: !Ref AppName
-      Environment: !Ref Environment
+      Parameters:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -172,7 +173,7 @@ Resources:
   MonitoringStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${NestedTemplateBaseURL}/monitoring.yaml"
+      TemplateURL: !Sub "${NestedTemplateBaseURL}/monitoring-logging.yaml"
       Parameters:
         BackendASGName: !GetAtt BackendStack.Outputs.ASGName
         BackendALBArn: !GetAtt BackendStack.Outputs.BackendALBArn
