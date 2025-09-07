@@ -116,7 +116,7 @@ Resources:
         SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
         RDSSecurityGroup: !GetAtt SecurityStack.Outputs.RDSSecurityGroup
         DBSecretArn: !GetAtt LambdaSecretStack.Outputs.DbSecretArn
-        CloudTrailArn: !GetAtt CloudTrail.Arn
+        # CloudTrailArn: !GetAtt CloudTrail.Arn
         AppName: !Ref AppName
         Environment: !Ref Environment
       Tags:
