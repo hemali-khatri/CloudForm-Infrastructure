@@ -565,7 +565,7 @@ Outputs:
     Value: !GetAtt BackendALB.DNSName
   BackendALBArn:
     Description: ARN of the Backend ALB
-    Value: !GetAtt BackendALB.Arn
+    Value: !Ref BackendALB
   BackendEC2SecurityGroup:
     Description: Security Group ID for Backend EC2
     Value: !Ref EC2SecurityGroup

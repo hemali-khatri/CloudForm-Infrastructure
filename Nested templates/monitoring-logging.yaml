@@ -164,7 +164,7 @@ Resources:
   BackendAppLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/${AppName}/${Environment}/backend-app"
+      LogGroupName: !Sub "/${AppName}/${Environment}/backend-loggroup"
       RetentionInDays: 30
       Tags:
         - Key: App
@@ -175,7 +175,7 @@ Resources:
   ALBAccessLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/${AppName}/${Environment}/alb-access-logs"
+      LogGroupName: !Sub "/${AppName}/${Environment}/alb-loggroup"
       RetentionInDays: 30
       Tags:
         - Key: App
@@ -186,7 +186,7 @@ Resources:
   RDSLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/${AppName}/${Environment}/rds-logs"
+      LogGroupName: !Sub "/${AppName}/${Environment}/rds-loggroup"
       RetentionInDays: 30
       Tags:
         - Key: App
