@@ -115,7 +115,6 @@ Resources:
       Parameters:
         SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
         RDSSecurityGroup: !GetAtt SecurityStack.Outputs.RDSSecurityGroup
-        DBPassword: !GetAtt LambdaSecretStack.Outputs.DBPassword
         DBSecretArn: !GetAtt LambdaSecretStack.Outputs.DbSecretArn
         AppName: !Ref AppName
         Environment: !Ref Environment
