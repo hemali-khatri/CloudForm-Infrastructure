@@ -262,7 +262,6 @@ Resources:
   BackendTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: ${AppName}-${Environment}-backend-tg
       VpcId: !Ref VPC
       Protocol: HTTP
       Port: 3000
@@ -446,7 +445,6 @@ Resources:
   CodePipelineServiceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AppName}-${Environment}-codepipeline-role"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -464,6 +462,17 @@ Resources:
                   - codeconnections:UseConnection
                   - codestar-connections:UseConnection
                 Resource: !Ref GitHubConnectionArn
+        - PolicyName: CodePipelineCloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codepipeline/${AppName}-${Environment}-backend-pipeline*"
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
         - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess

@@ -15,8 +15,8 @@ Parameters:
     Type: String
   RDSSecurityGroup:
     Type: String
-  CloudTrailArn:
-    Type: String
+  # CloudTrailArn:
+  #   Type: String
   AppName:
     Type: String
   Environment:
