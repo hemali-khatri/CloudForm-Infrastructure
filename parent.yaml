@@ -41,7 +41,7 @@ Parameters:
     Description: Environment name for resources
   NotificationEmail:
     Type: String
-    Default: you@example.com
+    Default: hemali.khatri@tatvasoft.com
     Description: Email for budget and CloudWatch/CloudTrail alerts
 
   GitHubConnectionArn:
@@ -116,6 +116,7 @@ Resources:
         SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
         RDSSecurityGroup: !GetAtt SecurityStack.Outputs.RDSSecurityGroup
         DBSecretArn: !GetAtt LambdaSecretStack.Outputs.DbSecretArn
+        CloudTrailArn: !GetAtt CloudTrail.Arn
         AppName: !Ref AppName
         Environment: !Ref Environment
       Tags:
