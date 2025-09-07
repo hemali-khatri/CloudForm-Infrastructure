@@ -32,7 +32,6 @@ Resources:
     Type: 'AWS::S3::Bucket'
     Properties:
       BucketName: !Sub "${AppName}-${Environment}-frontend-bucket"
-      AccessControl: Private
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:
