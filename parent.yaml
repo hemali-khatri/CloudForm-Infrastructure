@@ -209,6 +209,11 @@ Resources:
                   - codeconnections:UseConnection
                   - codestar-connections:UseConnection
                 Resource: !Ref GitHubConnectionArn
+              - Effect: Allow
+                Action:
+                - iam:PassRole  # <-- This is the new permission
+                Resource:
+                - !Sub arn:aws:iam::${AWS::AccountId}:role/${AppName}-${Environment}-codepipeline-role
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
