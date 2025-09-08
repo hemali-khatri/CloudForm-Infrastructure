@@ -1,0 +1,21 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+  build:
+    commands:
+      - echo "Uploading templates to S3 bucket: $TEMPLATE_BUCKET"
+      - aws s3 cp vpc.yaml s3://$TEMPLATE_BUCKET/vpc.yaml
+      - aws s3 cp security.yaml s3://$TEMPLATE_BUCKET/security.yaml
+      - aws s3 cp lambda-secret.yaml s3://$TEMPLATE_BUCKET/lambda-secret.yaml
+      - aws s3 cp rds.yaml s3://$TEMPLATE_BUCKET/rds.yaml
+      - aws s3 cp backend.yaml s3://$TEMPLATE_BUCKET/backend.yaml
+      - aws s3 cp frontend.yaml s3://$TEMPLATE_BUCKET/frontend.yaml
+      - aws s3 cp monitoring-logging.yaml s3://$TEMPLATE_BUCKET/monitoring-logging.yaml
+
+artifacts:
+  files:
+    - parent.yaml
+  discard-paths: yes
