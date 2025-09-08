@@ -18,6 +18,11 @@ Parameters:
     Type: String
     Default: hemali.khatri@tatvasoft.com
     Description: Email to receive CloudWatch alarm notifications
+  BackendALBDNSName:
+    Type: String
+    Description: DNS Name of Backend Application Load Balancer
+  DBEndPoint:
+    Type: String
   AppName:
     Type: String
   Environment:
@@ -193,17 +198,64 @@ Resources:
           Value: !Ref AppName
         - Key: Environment
           Value: !Ref Environment
-    
-    # Can create alarms for backend errors.    
-  BackendErrorMetricFilter:
-    Type: AWS::Logs::MetricFilter
+
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
     Properties:
-      LogGroupName: !Ref BackendAppLogGroup
-      FilterPattern: "[ERROR]"
-      MetricTransformations:
-        - MetricName: BackendErrors
-          MetricNamespace: !Sub "${AppName}/${Environment}"
-          MetricValue: "1"
+      DashboardName: !Sub "${AppName}-${Environment}-monitoring-dashboard" 
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/EC2", "CPUUtilization", "AutoScalingGroupName", "${BackendASGName}" ]
+                ],
+                "region": "${AWS::Region}",
+                "title": "ASG CPU Utilization",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "${DBEndPoint}" ]
+                ],
+                "region": "${AWS::Region}",
+                "title": "RDS Free Storage Space",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${BackendALBDNSName}" ]
+                ],
+                "region": "${AWS::Region}",
+                "title": "ALB 5XX Errors",
+                "period": 300,
+                "stat": "Sum"
+              }
+            }
+          ]
+        }
 
 Outputs:
   AlarmSNSTopic:
@@ -221,3 +273,7 @@ Outputs:
   RDSLogGroupName:
     Description: Log group for RDS logs
     Value: !Ref RDSLogGroup
+
+  DashboardName:
+    Description: Name of the CloudWatch Dashboard
+    Value: !Ref MonitoringDashboard
