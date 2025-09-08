@@ -49,7 +49,7 @@ Parameters:
     Default: arn:aws:codeconnections:us-east-1:410970225374:connection/fef028b3-cc24-4bfe-a884-3944dac3a3de
   GitHubRepo:
     Type: String
-    Default: hemali-khatri/CloudForm-infra   # repo where all templates live
+    Default: hemali-khatri/CloudForm-Infrastructure   # repo where all templates live
   GitHubBranch:
     Type: String
     Default: main
