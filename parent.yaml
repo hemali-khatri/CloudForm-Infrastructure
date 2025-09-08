@@ -346,9 +346,6 @@ Outputs:
   Environment:
     Value: !Ref Environment
     Description: Environment for this stack
-  AlertTopicArn:
-    Value: !Ref AlertTopic
-    Description: SNS Topic for budget/monitoring alerts
   # CloudTrailName:
   #   Value: !Ref CloudTrail
   #   Description: CloudTrail enabled for auditing
