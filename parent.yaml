@@ -328,11 +328,11 @@ Resources:
                 TemplatePath: SourceOutput::parent.yaml
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt PipelineRole.Arn
-                ParameterOverrides: |
-                  {
-                    "AppName": "#{AppName}",
-                    "Environment": "#{Environment}"
-                  }
+                ParameterOverrides: !Sub |
+                {
+                  "AppName": "${AppName}",
+                  "Environment": "${Environment}"
+                }
               InputArtifacts:
                 - Name: SourceOutput
               RunOrder: 2
