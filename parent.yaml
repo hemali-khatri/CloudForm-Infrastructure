@@ -282,16 +282,16 @@ Resources:
               RunOrder: 2
 
 
-  #################################
-  # SNS for Notifications
-  #################################
-  AlertTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub "${AppName}-${Environment}-alerts"
-      Subscription:
-        - Protocol: email
-          Endpoint: !Ref NotificationEmail
+  # #################################
+  # # SNS for Notifications
+  # #################################
+  # AlertTopic:
+  #   Type: AWS::SNS::Topic
+  #   Properties:
+  #     TopicName: !Sub "${AppName}-${Environment}-alerts"
+  #     Subscription:
+  #       - Protocol: email
+  #         Endpoint: !Ref NotificationEmail
 
 Outputs:
   FrontendWebsiteURL:
