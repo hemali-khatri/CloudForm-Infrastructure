@@ -291,7 +291,6 @@ Resources:
                 BranchName: !Ref GitHubBranch
               OutputArtifacts:
                 - Name: SourceOutput
-
         - Name: Build
           Actions:
             - Name: UploadTemplates
@@ -306,7 +305,6 @@ Resources:
                 - Name: BuildOutput
               Configuration:
                 ProjectName: !Ref TemplateUploader
-
         - Name: ManualApproval
           Actions:
             - Name: ApproveDeployment
@@ -316,7 +314,6 @@ Resources:
                 Provider: Manual
                 Version: 1
               RunOrder: 1
-
         - Name: Deploy
           Actions:
             - Name: CFNDeploy
